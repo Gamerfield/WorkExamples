@@ -1,0 +1,1337 @@
+<?
+/*
+Use cases:
+
+*/
+$pageHead = "Corp Management";
+$LogInRequired = TRUE;
+$SuperAdminRequired = TRUE;
+$AccessGrantedException = array('bobc@tcfholdings.com');
+$PageHead = '';
+$maincontainer_class = 'no-sidebar';
+
+
+require_once('../../lib/php/KyleLib/interface/tap-header.php');
+require_once($LibDir.'KyleLib/tap-ReportFunctions.php'); // for array_column
+require_once($LibDir.'KyleLib/BigArrays.php');
+require_once($LibDir.'KyleLib/Corp.php');
+// Rlog($States);
+$CorpList = SQL2Array("SELECT C.ID AS ID, CONCAT(C.ID, ': ', C.Name,' - ',P.Name) AS Title FROM Corp AS C LEFT JOIN Corp AS P ON P.ID = C.parent_id WHERE C.parent_id > 0");
+//Rlog($CorpList, " CorpList");
+$ReportList = SQL2Array("SELECT C.ID AS ID,CONCAT(C.ID, ' - ', C.Title,' - ', IF(P.Converted = -1 , '(New Bootstrap)', '(OLD Bootstrap)') ) AS Title FROM Report AS C LEFT JOIN Report AS P ON P.ID = C.ID WHERE C.Archive = 0");
+
+$AllReports = SQL2Arrays("SELECT * FROM Report WHERE Archive = 0");
+
+$PackageReports = SQL2Arrays("SELECT * FROM PackagesReports WHERE 1");
+$PackageReportsByPackageID = array();
+foreach($PackageReports AS $PR) {
+  $PackageReportsByPackageID[$PR['PackagesID']][$PR['ReportID']] = $PR;
+}
+
+RLog($_SESSION);
+
+//Rlog($RL , " dfgdfg");
+
+//Rlog($RL['id'], " ReportList");
+$TeamData = array();
+
+$today = date("Y-m-d");
+
+$FreeConversion = array(
+  0 => 'Users can purchase individually',
+  1 => 'Admin/Staff Only',
+  2 => 'Auto added (internal users)',
+  3 => 'Auto added (all users)');
+
+$CorpOnlyConversion = array(
+  0 => 'All Members',
+  1 => 'Admin/Staff'
+);
+
+$ReportTypeConversion = array(
+  0 => 'Individual',
+  1 => '2 Person Report',
+  2 => 'Team Report',
+  3 => 'Special Use Case'
+);
+
+$GenderConversion = array(
+  'C' => 'Co-ed',
+  'M' => 'Male',
+  'F' => 'Female'
+);
+
+$SportLevelConversion = array(
+  'NAIA' => 'College NAIA',
+  'NJCAA' => 'College NJCAA 2-year',
+  'ColD3' => 'College - NCAA D3',
+  'ColD2' => 'College - NCAA D2',
+  'ColD1' => 'College - NCAA D1',
+  'HS' => 'High School',
+  'MS' => 'Middle School',
+  'CA' => 'Club Adults',
+  'CHS' => 'Club HS',
+  'CMS' => 'Club MS',
+  'C' => 'Club',
+  'Ot' => 'Other',
+  'Pro' => 'Pro',
+  'Con' => 'Consultant',
+  'NonSports' => 'Non Sports'
+);
+
+$FullPageURL = (isset($_SERVER['HTTPS']) ? "https" : "http") . "://$_SERVER[HTTP_HOST]$_SERVER[REQUEST_URI]";
+if ($isDevServerTF) {
+  $FullPageURL = str_replace('app.', 'dev.', $FullPageURL);
+}
+//RLog($FullPageURL);
+// $_GET['TeamID'] = 62;
+if (vd($_GET['TeamID'], 0) > 1) {
+  $SQLTeamID = SQLSafe($_GET['TeamID']);
+
+  $CorpO = new Corp();
+  $CorpO = $CorpO->GetCorp($SQLTeamID);
+
+  $CorpO = $CorpO->GetCorpPaymentStatus();
+  $CorpO = $CorpO->GetCorpReports();
+  RLog($CorpO);
+  
+  if(isset($_GET['Fix']) && $_GET['Fix'] > 0) {
+		$FixRID = SQLSafe($_GET['Fix']);
+		$Check = $CorpO->FixPackageReport(array('ReportID' => $FixRID));
+  }
+  
+  $ParentData = SQLGetRow("SELECT * FROM Corp WHERE ID = {$CorpO->parent_id}");
+  
+  $BrandData = array();
+  $BrandData = SQLGetRow("SELECT * FROM Corp WHERE ID = {$CorpO->parent_id}");
+  while($BrandData['brand'] != 1) {
+    $BrandData = SQLGetRow("SELECT * FROM Corp WHERE ID = {$BrandData['parent_id']}");
+  }
+
+  $ReportTable = SQL2Arrays("SELECT * FROM Report WHERE 1");
+  
+  // Code to fill out CorpAttributeList
+  $Attributes = SQL2Arrays("SELECT * FROM CorpAttributeList WHERE 1 ORDER BY Attribute ASC");
+  $AttributeTypes = SQL2Array("SELECT Attribute AS ID, Type AS Title FROM CorpAttributeList WHERE 1");
+  $AttributeValues = SQL2Array("SELECT Attribute AS ID, ValueArray AS Title FROM CorpAttributeList WHERE 1");
+  
+  // Brand Packages
+  $PackagesDB = SQL2Arrays("SELECT * FROM Packages WHERE TeamPackage = 1");
+  $BrandPackages = array();
+  foreach($PackagesDB AS $Row) {
+    $PackageBrands = explode(",", $Row['BrandCorpID']);
+    if(in_array($BrandData['ID'], $PackageBrands)) {
+      if($Row['UseReportsFrom'] == null) {
+        $BrandPackages[] = $Row;
+      } else {
+        $BrandPackages[] = $PackagesDB[$Row['UseReportsFrom']];
+      }
+    }
+  }
+}
+
+//Rlog($UserIDs, "UserID");
+?>
+<!--<script src="/typeahead/src/jquery.typeahead.js"></script>-->
+<!--<link rel="stylesheet" href="typeahead/src/jquery.typeahead_zyched.css">-->
+
+<style>
+  .searchElement {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    border: 1px solid black;
+    padding: 5px;
+    z-index: 100;
+    /* Thanks Diego for pointing out the typo here */
+    background-color: red;
+    display: none;
+  }
+</style>
+
+<div class="container-fluid">
+  <div class="panel panel-primary">
+    <div class="panel-heading">
+      <strong>SELECT THE TEAM YOU WANT TO MODIFY</strong>
+    </div>
+    <div class="panel-body">
+      <!-- Quick Search -->
+      <div class="row">
+        <div class="col-xs-8">
+          <form id="form-country_v1" name="form-country_v1">
+            <div class="input-group">
+              <input class="corpList form-control" id="corpSearch" name="TeamID" type="search" placeholder="Team Name or ID" autocomplete="off" data-toggle="dropdown">
+              <ul class="dropdown-menu" id="searchDrop">
+                <li><a href="#" class="teamResult">Start typing to see teams.</a></li>
+              </ul>
+              <span class="input-group-btn">
+                <a href="#" id="searchButton" class="btn btn-default">
+                  Go
+                </a>
+              </span>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- ------------------------------------ Core Team ------------------------------------ -->
+  <? if (isset($CorpO)) { ?>
+    <div class="panel panel-primary">
+      <div class="panel-heading">
+        <strong><?=strtoupper($CorpO->Name) ?> - Team Data</strong>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="col-xs-8">
+            <div class="row">
+              <div class="col-xs-4">
+                <label class="control-label" for="inputGroup"><span style="color: red;">*</span>ID</label>
+                <input type="numeric" class="form-control" placeholder="<?=$CorpO->ID ?>" value=<?=$CorpO->ID?> readonly>
+              </div>
+              <div class="col-xs-8">
+                <label class="control-label" for="inputGroup"><span style="color: red;">*</span>Team Name</label>
+                <div class="input-group">
+                  <input type="text" class="form-control" id="orgName" placeholder="Team's Name" value="<?=$CorpO->Name?>">
+                  <span class="input-group-btn">
+                    <button class="btn btn-default" id="saveName"><b><i style="color:#2798d7; font-size: 14;" class="fa fa-pencil-square-o" aria-hidden="true"></i> Update</b></button>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <br>
+            
+            <div class="row">
+              <div class="col-xs-4">
+                <label class="control-label" for="inputGroup">Package Level</label>
+                <div class="input-group">
+                  <input type="text" class="form-control" value="<?=vd($CorpO->Attributes['PackageLevel'], 'No Package Level') ?>" readonly>
+                  <span class="input-group-btn">
+                    <button class="btn btn-default" type="submit" id="editPackage" data-toggle="modal" data-target="#packageModal">Edit</button>
+                  </span>
+                </div>
+              </div>
+              <div class="col-xs-4">
+                <label class="control-label" for="inputGroup"><span style="color: red;">*</span>Brand</label>
+                <input type="text" class="form-control" placeholder="Brand Name" value="<?=$BrandData['ID'].' - '.$BrandData['Name']?>" readonly>
+              </div>
+              <div class="col-xs-4">
+                <label class="control-label" for="inputGroup"><span style="color: red;">*</span>Parent Org</label>
+                <input type="text" class="form-control" placeholder="Brand Name" value="<?=$ParentData['ID'].' - '.$ParentData['Name']?>" readonly>
+              </div>
+            </div>
+            <br>
+            
+            <div class="row">
+              <div class="col-xs-3">
+                <label class="control-label" for="inputGroup">Status:</label><br>
+                <div class="input-group">
+                  <select id="Status" name="Status" class="form-control">
+                    <option <?=vd($CorpO->PaymentStatus['status']) == ''?'selected':'' ?>>None Selected</option>
+                    <option <?=vd($CorpO->PaymentStatus['status']) == 'Free - Scholarship'?'selected':'' ?>>Free - Scholarship</option>
+                    <option <?=vd($CorpO->PaymentStatus['status']) == 'Free - Trial'?'selected':'' ?>>Free - Trial</option>
+                    <option <?=vd($CorpO->PaymentStatus['status']) == 'Free - Expired'?'selected':'' ?>>Free - Expired</option>
+                    <option <?=vd($CorpO->PaymentStatus['status']) == 'Free - Freemium'?'selected':'' ?>>Free - Freemium</option>
+                    <option <?=vd($CorpO->PaymentStatus['status']) == 'Paying - Invoice'?'selected':'' ?>>Paying - Invoice</option>
+                    <option <?=vd($CorpO->PaymentStatus['status']) == 'Paying - Stripe Subscription'?'selected':'' ?>>Paying - Stripe Subscription</option>
+                    <option <?=vd($CorpO->PaymentStatus['status']) == 'Paying - Partner'?'selected':'' ?>>Paying - Partner</option>
+                    <option <?=vd($CorpO->PaymentStatus['status']) == 'Archive'?'selected':'' ?>>Archive</option>
+                  </select>
+                </div>
+              </div>
+              <div class="col-xs-3">
+                <label class="control-label" for="inputGroup">Status End Date:</label><br>
+                <input type="date" class="form-control" id="EndDate" name="EndDate" value="<?=vd($CorpO->PaymentStatus['enddate'], 0) ?>">
+              </div>
+            </div>
+          </div>
+          
+          <div class="col-xs-4">
+            <div class="row">
+              <div class="col-xs-12">
+                <label class="control-label" for="inputGroup"><span style="color: red;">*</span>Code Base</label>
+                <div class="input-group">
+                  <input type="text" class="form-control" id="codeBase" placeholder="Code Base" value="<?=$CorpO->shortcodebase?>">
+                  <span class="input-group-btn">
+                    <button class="btn btn-default" id="saveCodeBase"><b><i style="color:#2798d7; font-size: 14;" class="fa fa-pencil-square-o" aria-hidden="true"></i> Update</b></button>
+                  </span>
+                </div>
+                <br>
+                <center>
+                  <span style="font-size: 12px;"><a href="tap-manage.php?LoginCorpID=<?=$CorpO->ID?>" target="_blank">Edit individual lots on Manage</a></span>
+                </center>
+                <ul id="lotCodes">
+                  <?
+                    foreach($CorpO->Lots AS $Lots){
+                      if($Lots['External'] == 1){
+                        echo '<li>'.$Lots['Name'].': '.vd($Lots['code'], 'NULL').' (External)</li>';
+                      }else{
+                        echo '<li>'.$Lots['Name'].': '.vd($Lots['code'], 'NULL').' (Internal)</li>';
+                      }
+                    }
+                  ?>
+                </ul>
+              </div>
+            </div>  
+          </div>
+        </div>
+        <br>
+        
+        <div class="row">
+          <div class="col-xs-12">
+            <table id="statusTable" name="statusTable" class="table table-striped table-bordered table-condensed table-hover">
+              <thead>
+                <tr>
+                  <th class="col-xs-2">Updated By:</th>
+                  <th class="col-xs-2">Updated On:</th>
+                  <th class="col-xs-2">Status:</th>
+                  <th class="col-xs-2">Status Ends On:</th>
+                  <th class="col-xs-4">Note:</th>
+                </tr>
+              </thead>
+              <tbody>
+                <?
+                if (isset($CorpO->PaymentHistory) && !empty($CorpO->PaymentHistory)) {
+                  foreach ($CorpO->PaymentHistory AS $R) {
+                    ?>
+                    <tr style="font-size: 13px;">
+                      <td><?=$R['Name'] ?></td>
+                      <td><?=$R['NoteDate'] ?></td>
+                      <td><?=$R['status'] ?></td>
+                      <td><?=$R['enddate'] ?></td>
+                      <td><?=$R['note'] ?></td>
+                    </tr>
+                    <?
+                  }
+                } else {
+                  ?>
+                  <tr>
+                    <td colspan=5>No history</td>
+                  </tr>
+                  <?
+                }
+                ?>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-xs-6">
+            <label class="control-label" for="inputGroup">Status Note:</label><br>
+            <textarea cols=30 class="form-control" id="Note" name="Note"></textarea>
+          </div>
+          <div class="col-xs-6">
+            <label class="control-label" for="inputGroup">Status Changed On:</label>
+            <div class="input-group">
+              <input type="date" class="NoteDate form-control" id="NoteDate" name="NoteDate" value="<?=$today ?>">
+              <span class="input-group-btn">
+                <button class="btn btn-default" id="saveStatus"><b><i style="color:#2798d7; font-size: 14;" class="fa fa-pencil-square-o" aria-hidden="true"></i> Save Status</b></button>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- ------------------------------------ Report management ------------------------------------ -->
+    
+    <div class="panel panel-primary">
+      <div class="panel-heading">
+        <strong>MANAGE REPORTS</strong>
+      </div>
+      <div class="panel-body">
+        <!-- Current Package -->
+        <div class="row">
+          <div class="col-xs-12 col-sm-8 col-md-6" style="float: left;">
+            Package Level:<br>
+            <div class="input-group">
+              <input type="text" class="form-control" value="<?=vd($CorpO->Attributes['PackageLevel'], 'No Package Level') ?>" readonly>
+              <span class="input-group-btn">
+                <button class="btn btn-default" type="submit" id="editPackage" data-toggle="modal" data-target="#packageModal">Edit</button>
+              </span>
+            </div>
+            <br>
+          </div>
+        </div>
+        <?
+          if(isset($CorpO->PackageReports)) {
+            ?>
+              <div class="row">
+                <div class="col-xs-12">
+                  <?=$CorpO->Attributes['PackageLevel']?> Reports
+                  <table class="table table-bordered table-condensed table-striped">
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th class="col-xs-4">Name</th>
+                        <th class="col-xs-2">Type</th>
+                        <th class="col-xs-3">Free to Team</th>
+                        <th class="col-xs-3">Viewable By</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <?
+                      
+                        foreach ($CorpO->PackageReports AS $PRTS) {
+                          $ReportID = $PRTS['ReportID'];
+                          $Name = $PRTS['Title'];
+                          $Free = $PRTS['free'];
+                          $CorpOnly = $PRTS['CorporateOnly'];
+                          $ReportType = $PRTS['ReportTypeID'];
+                          $FreeError = '';
+                          $CorpOnlyError = '';
+                          // if($PackageActual[$PRTS]['CorpFree'] != $Free) {
+                          //   $FreeError = '<span style="color: red;">Should be: <em>'.$FreeConversion[$PackageActual[$PRTS]['CorpFree']].'</em></span>';
+                          // }
+                          // if($PackageActual[$PRTS]['CorpOnly'] != $CorpOnly) {
+                          //   $CorpOnlyError = '<span style="color: red;">Should be: <em>'.$CorpOnlyConversion[$PackageActual[$PRTS]['CorpOnly']].'</em></span>';
+                          // }
+                          //RLog('PRTS '.$Free.' '.$CorpOnly.' '.$Name);
+                          ?>
+                          <tr class="text-center">
+                            <td><?=$ReportID ?></td> <!-- ID -->
+                            <td><?=$Name ?></td> <!-- Name -->
+                            <td><?=$ReportTypeConversion[$ReportType] ?></td> <!-- Report Type -->
+                            <td>
+                              <input type="text" class="form-control" placeholder="Free" value="<?=$FreeConversion[$Free] ?>" readonly>
+                              <?=$FreeError != ''?$FreeError:'' ?>
+                            </td> <!-- Free -->
+                            <td>
+                              <input type="text" class="form-control" placeholder="Admin & Users" value="<?=$CorpOnlyConversion[$CorpOnly] ?>" readonly>
+                              <?=$CorpOnlyError != ''?$CorpOnlyError:'' ?>
+                            </td> <!-- CorporateOnly -->
+                            <td>
+                              <?
+                              if ($FreeError != '' || $CorpOnlyError != '') {
+                                echo '<a href="'.$FullPageURL.'&Fix='.$ReportID.'"><button type="button" class="btn btn-default btn-sm" id="fix'.$ReportID.'"><i class="fa fa-wrench" aria-hidden="true" style=" color: red;"></i> <b>Fix Settings</b></button></a>';
+                              }
+                              ?>
+                            </td>
+                          </tr>
+                          <?
+                        }
+        
+                        if (isset($CorpO->MissingPackageReports) && !empty($CorpO->MissingPackageReports)) {
+                          ?>
+                          <tr>
+                            <td colspan=6 style="background-color: #FFD3D3">Missing <?=$CorpO->Attributes['PackageLevel'] ?> Reports</td>
+                          </tr>
+                          <?
+                          foreach ($CorpO->MissingPackageReports AS $PRTS) {
+                            $ReportID = $PRTS['ReportID'];
+                            $Name = $PRTS['Title'];
+                            $Free = $PRTS['CorpFree'];
+                            $CorpOnly = $PRTS['CorpOnly'];
+                            $ReportType = $PRTS['ReportTypeID'];
+                            ?>
+                            <tr class="text-center">
+                              <td><?=$ReportID ?></td> <!-- ID -->
+                              <td><?=$Name ?></td> <!-- Name -->
+                              <td><?=$ReportTypeConversion[$ReportType] ?></td> <!-- Report Type -->
+                              <td>
+                                <input type="text" class="form-control" placeholder="Free" value="<?=$FreeConversion[$Free] ?>" readonly>
+                              </td> <!-- Free -->
+                              <td>
+                                <input type="text" class="form-control" placeholder="Admin & Users" value="<?=$CorpOnlyConversion[$CorpOnly] ?>" readonly>
+                              </td> <!-- CorporateOnly -->
+                              <td>
+                                <a href="<?=$FullPageURL?>&Fix=<?=$ReportID ?>"><button type="button" class="btn btn-default btn-sm" id="AddPackageReport'.$PRTS.'"><i style="color: red" class="fa fa-plus" aria-hidden="true"></i> <b>Add Missing Report</b></button></a>
+                              </td>
+                            </tr>
+                            <?
+                          }
+                        }
+                      ?>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <hr>
+            <?
+          }
+        ?>
+        <div class="row">
+          <div class="col-xs-8" style="float: left;">
+            <?
+              if($CorpO->Attributes['PackageLevel'] == 'Custom Package') {
+                echo 'Custom Package Reports';
+              } else {
+                echo 'Non-Package Reports (Extra reports that are not in '.$CorpO->Attributes['PackageLevel'].' Package)';
+              }
+            ?>
+          </div>
+          <div class="col-xs-4" style="float: right;">
+            <span style="float: right; padding-bottom: 10px;"><button class="btn btn-default btn-sm" id="advancedSearch" data-toggle="modal" data-target="#addReportModal"><b><i class="fa fa-plus" aria-hidden="true" style="color: #2798d7"></i> Add Report</b></button></span>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-xs-12">
+            <table class="table table-bordered table-condensed table-striped">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th class="col-xs-3">Name</th>
+                  <th class="col-xs-2">Type</th>
+                  <th class="col-xs-2">Free to Team</th>
+                  <th class="col-xs-2">Viewable By</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <?
+                  //RLog($ReportTable);
+                  //RLog($Reports);
+                  //RLog($PackageReportsTeamHas);
+                  if (isset($CorpO->NonPackageReports)) {
+                    foreach ($CorpO->NonPackageReports AS $ER) {
+                      $ReportID = $ER['ReportID'];
+                      $Name = $ER['Title'];
+                      $Free = $ER['free'];
+                      $CorpOnly = $ER['CorporateOnly'];
+                      $ReportType = $ER['ReportTypeID'];
+  
+                      ?>
+                        <tr class="text-center" id="extraReportRow<?=$ReportID?>">
+                          <td><?=$ReportID ?></td> <!-- ID -->
+                          <td><?=$Name ?></td> <!-- Name -->
+                          <td><?=$ReportTypeConversion[$ReportType] ?></td> <!-- Report Type -->
+                          <td>
+                            <select class="form-control" id="reportCorpFree<?=$ReportID?>">
+                              <?
+                                foreach($FreeConversion AS $ValID => $ValDisplay) {
+                                  if($ValID == $Free) {
+                                    $Selected = 'Selected';
+                                  } else {
+                                    $Selected = '';
+                                  }
+                                  echo '<option value="'.$ValID.'" '.$Selected.'>'.$ValDisplay.'</option>';
+                                }
+                              ?>
+                            </select>
+                          </td> <!-- Free -->
+                          <td>
+                            <select class="form-control" id="reportCorpOnly<?=$ReportID?>">
+                              <?
+                                foreach($CorpOnlyConversion AS $ValID => $ValDisplay) {
+                                  if($ValID == $CorpOnly) {
+                                    $Selected = 'Selected';
+                                  } else {
+                                    $Selected = '';
+                                  }
+                                  echo '<option value="'.$ValID.'" '.$Selected.'>'.$ValDisplay.'</option>';
+                                }
+                              ?>
+                            </select>
+                          </td> <!-- CorporateOnly -->
+                          <td class="text-center">
+                            <button class="btn btn-primary btn-sm saveReport" id="saveReport<?=$ReportID?>" data-ReportID="<?=$ReportID?>"><i class="fa fa-pencil-square-o"></i><b> Save Changes</b></button> 
+                            <button class="btn btn-default btn-sm" style="float: right;" data-toggle="modal" data-target="#ConfirmDeleteReport<?=$ReportID?>"><i class="fa fa-trash" aria-hidden="true" style="color:red;"></i><b>  Delete</b></button>
+                          </td>
+                        </tr>
+                        
+                        <!-- ------------------------------------ Delete Non Package Report Confirmation Modal ------------------------------------ -->
+                        <div class="modal fade" id="ConfirmDeleteReport<?=$ReportID?>" tabindex="-1" role="dialog" aria-labelledby="ConfirmDeleteReport<?=$ReportID?>" aria-hidden="true">
+                          <div class="modal-dialog" role="document">
+                            <div class="modal-content">
+                              <div class="modal-header">
+                                Delete Report
+                              </div>
+                              <div class="modal-body">
+                                <div class="row">
+                                  <div class="col-xs-12">
+                                    <center>
+                                      Are you sure you want to DELETE this report:<br>
+                                      <strong><?=$ReportID?> - <?=$Name?></strong>
+                                      <br>
+                                      <hr>
+                                      <button class="btn btn-danger deleteReport" id="deleteReport<?=$ReportID?>" data-ReportID="<?=$ReportID?>"><i class="fa fa-trash" aria-hidden="true"></i><b>  Delete Report <?=$ReportID?></b></button> 
+                                      <button type="button" class="btn btn-secondary" data-dismiss="modal" style="float: right;">CANCEL</button>
+                                    </center>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      <?
+                    }
+                  }
+                ?>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ------------------------------------ Mental Gym ------------------------------------ -->
+
+    <div class="panel panel-primary">
+      <div class="panel-heading">
+        <strong>MENTAL GYM ACCESS</strong>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="col-xs-6" style="float: left;">
+            Package Level (Edit this in Reports Section):<br>
+            <input type="text" class="form-control" value="<?=vd($CorpO->Attributes['PackageLevel'], 'No Package Level') ?>" readonly>
+            <br>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-xs-12">
+            All Mental Gym access is controlled by Package Level and the MentalGymBeta Corp Attribute.<br>
+            Teams with Elite, Premium, and MentalGymBeta=1 have full access to the Mental Gym.<br>
+            This section will be updated in the future after module based access has been refined and needed.
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- ------------------------------------ Corp Attributes ------------------------------------ -->
+
+    <div class="panel panel-primary">
+      <div class="panel-heading">
+        <strong>ATTRIBUTES</strong>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <div class="col-xs-12">
+            <button class="btn btn-primary" style="float: right;" data-toggle="modal" data-target="#NewAttributeModal"><i class="fa fa-plus"></i> New Attribute</button>
+            <h4>If you need to change a field that is Read Only, please contact a Lead Developer.</h4>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-md-6 col-md-offset-3 col-xs-12 col-sm-12">
+            <table class="table table-condensed table-striped">
+              <thead>
+                <tr>
+                  <th>Attribute Name</th>
+                  <th>Attribute Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                <?
+                  foreach($CorpO->Attributes AS $Attribute => $CurrValue) {
+                    if($Attribute != 'PackageLevel') { // handling packagelevel above
+                      $AttType = vd($AttributeTypes[$Attribute], 'Input');
+                      $AttValues = vd($AttributeValues[$Attribute], '');
+                      $EditValue = '';
+                      switch ($AttType) {
+                        case 'Input':
+                          $EditValue = '';
+                          if ($AttValues == 'ReadOnly' && vd($_SESSION['ID'], -1) != 901) {
+                            $EditValue = '<div class="input-group"><input type="text" class="form-control" placeholder="Enter '.$Attribute.'" value="'.$CurrValue.'" readonly><a class="input-group-addon">Read Only</a></div>';
+                          } else {
+                            $EditValue = '<div class="input-group"><input type="text" class="form-control editAttribute" id="Attribute'.$Attribute.'" placeholder="Enter '.$Attribute.'" value="'.$CurrValue.'" ><span class="input-group-btn"><button class="btn btn-primary updateCorpAttribute" id="update'.$Attribute.'" data-Attribute="'.$Attribute.'">Update</button></span></div>';
+                          }
+                          break;
+                        case 'Dropdown':
+                          $EditValue = '<div class="input-group"><select class="form-control editAttribute" id="Attribute'.$Attribute.'">';
+                          if($AttValues != '') {
+                            if(strpos($AttValues, 'BigArrays') !== false) {
+                              // Uses the variable from BigArrays
+                              $AttValues = explode("-",$AttValues);
+                              $AttValue = $AttValues[1];
+                              $AttValues = isset($$AttValue) ? $$AttValue : WTF("Big Array variable is not set: ".$$AttValue, false);
+                            } else {
+                              $AttValues = explode(",",$AttValues);
+                            }
+                            if(!in_array('January', $AttValues)) {
+                              asort($AttValues);
+                            }
+                            foreach($AttValues AS $ID => $Val) {
+                              $ValID = is_numeric($ID)?$Val:$ID; // don't use numeric index (mostly for BigArrays)
+                              $ValDisplay = $Val;
+                              // Nice names for SportLevel
+                              if($Attribute == 'Level') {
+                                $ValDisplay = vd($SportLevelConversion[$ValID], $ValDisplay);
+                              }
+                              if($Attribute == 'TeamGender') {
+                                $ValDisplay = vd($GenderConversion[$ValID], $ValDisplay);
+                              }
+                              if ($CurrValue == $ValID) {
+                                $Selected = 'selected';
+                              } else {
+                                $Selected = '';
+                              }
+                              $EditValue .= '<option value="'.$ValID.'" '.$Selected.'>'.$ValDisplay.'</option>';
+                            }
+                            $EditValue .= '</select><span class="input-group-btn"><button class="btn btn-primary updateCorpAttribute" id="update'.$Attribute.'" data-Attribute="'.$Attribute.'">Update</button></span></div>';
+                          }
+                          break;
+                        case 'Binary':
+                          $EditValue = '';
+                          if ($AttValues == 'ReadOnly' && vd($_SESSION['ID'], -1) != 901) {
+                            $EditValue = '<input type="checkbox" class="" style="width: 25px; height: 25px;" placeholder="Enter '.$Attribute.'" '.(($CurrValue==1)?'checked':'').' readonly>';
+                          } else {
+                            $EditValue = '<input type="checkbox" class="editAttribute" style="width: 25px; height: 25px;" id="Attribute'.$Attribute.'" '.(($CurrValue==1)?'checked':'').'><button class="btn btn-primary updateCorpAttribute" id="update'.$Attribute.'" data-Attribute="'.$Attribute.'" style="float: right;">Update</button>';
+                          }
+                          break;
+                        case 'MultiSelect':
+                          $EditValue = '<button class="btn btn-primary updateCorpAttribute" id="update'.$Attribute.'" data-Attribute="'.$Attribute.'" style="float: right;">Update</button><select class="form-control editAttribute" id="Attribute'.$Attribute.'" style="width: 250px;" size="8" multiple>';
+                          if($AttValues != '') {
+                            if(strpos($AttValues, 'BigArrays') !== false) {
+                              // Uses the variable from BigArrays
+                              $AttValues = explode("-",$AttValues);
+                              $AttValue = $AttValues[1];
+                              $AttValues = isset($$AttValue) ? $$AttValue : WTF("Big Array variable is not set: ".$$AttValue, false);
+                            } else {
+                              $AttValues = explode(",",$AttValues);
+                            }
+                            asort($AttValues);
+                            foreach($AttValues AS $Val) {
+                              if (strpos($CurrValue, $Val) !== false) {
+                                $Selected = 'selected';
+                              } else {
+                                $Selected = '';
+                              }
+                              $EditValue .= '<option value="'.$Val.'" '.$Selected.'>'.$Val.'</option>';
+                            }
+                            $EditValue .= '</select>';
+                          }
+                          break;
+                        default:
+                          $EditValue = '';
+                          break;
+                      }
+                      ?>
+                        <tr>
+                          <td><?=$Attribute?></td>
+                          <td><?=$EditValue?></td>
+                          <td>
+                            <?
+                              if($AttValues != 'ReadOnly') {
+                                ?>
+                                  <button class="btn btn-danger" style="float: right;" data-toggle="modal" data-target="#deleteAttribute<?=$Attribute?>"><i class="fa fa-trash"></i></button>
+                                <?
+                              }
+                            ?>
+                          </td>
+                        </tr>
+                        
+                        <!-- ------------------------------------ Confirm Delete Attribute Modal ------------------------------------ -->
+                        <div class="modal fade" id="deleteAttribute<?=$Attribute?>" tabindex="-1" role="dialog" aria-labelledby="deleteAttribute<?=$Attribute?>" aria-hidden="true">
+                          <div class="modal-dialog" role="document">
+                            <div class="modal-content">
+                              <div class="modal-header">
+                                <h5 class="modal-title" id="deleteAttributeHead">Delete Attribute</h5>
+                              </div>
+                              <div class="modal-body">
+                                <div class="row">
+                                  <div class="col-xs-12">
+                                    <center>
+                                      <h3>
+                                        Are you sure you want to delete:<br>
+                                        <?=$Attribute?>: <?=$CurrValue?>
+                                      </h3>
+                                    </center>
+                                </div>
+                              </div>
+                              <div class="modal-footer">
+                                <button class="btn btn-danger deleteAttribute" id="remove<?=$Attribute?>" data-Attribute="<?=$Attribute?>"><i class="fa fa-trash"></i> DELETE</button>
+                                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      <?
+                    } // end if not package level
+                  }
+                ?>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- ----------------------------------------------------------- MODALS ----------------------------------------------------------- -->
+
+    <!-- ------------------------------------ Package Level Modal ------------------------------------ -->
+    <div class="modal fade" id="packageModal" tabindex="-1" role="dialog" aria-labelledby="packageModal">
+      <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="packageModal">Edit Package</h5>
+          </div>
+          <div class="modal-body">
+            <div class="panel-body">
+              <!-- Quick Search -->
+              <div class="row">
+                <div class="col-xs-12">
+                  CURRENT PACKAGE LEVEL: <span style="color: #1f4fa2;"><b><?=vd($CorpO->Attributes['PackageLevel'], 'No Package Level') ?></b></span>
+                </div>
+              </div>
+              <div class="row">
+                <div class="col-xs-3">
+                  NEW PACKAGE:
+                </div>
+                <div class="col-xs-5">
+                  <select type="text" class="form-control" style="float: left;" id="newPackageLevelDrop">
+                    <option value="-1" selected>Custom Package</option>
+                    <?
+                      foreach($BrandPackages AS $Row) {
+                        echo '<option value="'.$Row['ID'].'" >'.$Row['Name'].'</option>';
+                      }
+                    ?>
+                  </select>
+                </div>
+              </div>
+              <div class=" addReport">
+                <hr>
+                <div class="row">
+                  <div class="col-xs-4">
+                    Reports being REMOVED
+                  </div>
+                  <div class="col-xs-4">
+                    Shared Reports
+                  </div>
+                  <div class="col-xs-4">
+                    Reports being ADDED
+                  </div>
+                </div>
+                <div class="row">
+                  <div class="col-xs-4">
+                    <ul id="packageRemoving">
+                      <li>Not Applicable for Custom Package.</li>
+                    </ul>
+                  </div>
+                  <div class="col-xs-4">
+                    <ul id="packageShared">
+                      <li>Not Applicable for Custom Package.</li>
+                    </ul>
+                  </div>
+                  <div class="col-xs-4">
+                    <ul id="packageAdding">
+                      <li>Not Applicable for Custom Package.</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <strong>These changes will happen immediately.</strong>
+            <button type="button" class="btn btn-primary" id="saveNewPackageLevel">Change Package</button>
+            <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ------------------------------------ Add Report Modal ------------------------------------ -->
+    <div class="modal fade" id="addReportModal" tabindex="-1" role="dialog" aria-labelledby="addReportModal" aria-hidden="true">
+      <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Add Report</h5>
+          </div>
+          <div class="modal-body">
+            <div class="row">
+              <div class="col-xs-12">
+                <form id="form-country_v1" name="form-country_v1">
+                  <div class="input-group">
+                    <input class="corpList form-control" id="reportSearch" name="ReportSearch" type="search" placeholder="Report Name or ID" autocomplete="off" data-toggle="dropdown">
+                    <ul class="dropdown-menu" id="reportSearchDrop">
+                      <li><a href="#" class="reportResult" data-ReportID="-1">Start typing to see reports.</a></li>
+                    </ul>
+                    <span class="input-group-btn">
+                      <a href="#" id="reportSearchButton" class="btn btn-default">
+                        Search
+                      </a>
+                    </span>
+                  </div>
+                </form>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-xs-12">
+                <table class="table table-bordered table-condensed">
+                  <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Free to Team</th>
+                    <th>Viewable By</th>
+                  </tr>
+                  <tr class="addReportRow hidden">
+                    <th id="addReportRowID">ID</th>
+                    <th id="addReportRowName">Name</th>
+                    <th id="addReportRowType">Type</th>
+                    <th>
+                      <select class="form-control" id="addReportRowFree">
+                        <?
+                          foreach($FreeConversion AS $ValID => $ValDisplay) {
+                            echo '<option value="'.$ValID.'">'.$ValDisplay.'</option>';
+                          }
+                        ?>
+                      </select>
+                    </th>
+                    <th>
+                      <select class="form-control" id="addReportRowViewableBy">
+                        <?
+                          foreach($CorpOnlyConversion AS $ValID => $ValDisplay) {
+                            echo '<option value="'.$ValID.'">'.$ValDisplay.'</option>';
+                          }
+                        ?>
+                      </select>
+                    </th>
+                  </tr>
+                </table>
+              </div>
+            </div>
+            <br>
+            <div class="modal-footer">
+              <strong>Report will be added immediately.</strong>
+              <button type="button" class="btn btn-primary" id="confirmAddReport">Add Report</button>
+              <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+              <!--<button type="button" class="btn btn-primary">Add Report</button>-->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- ------------------------------------ New Corp Attribute Modal ------------------------------------ -->
+    <div class="modal fade" id="NewAttributeModal" tabindex="-1" role="dialog" aria-labelledby="NewAttributeModal" aria-hidden="true">
+      <div class="modal-dialog" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="exampleModalLongTitle">New Organization Attribute</h5>
+          </div>
+          <div class="modal-body">
+            <div class="row">
+              <div class="col-xs-12">
+                <label class="control-label" for="newAttributeDrop">New Attribute:</label>
+                <select id="newAttributeDrop" name="newAttributeDrop">
+                  <?
+                    foreach($Attributes AS $AID => $ARow) {
+                      if(!array_key_exists($ARow['Attribute'], $CorpO->Attributes)) {
+                        echo '<option id="'.$ARow['Attribute'].'">'.$ARow['Attribute'].'</option>';
+                      }
+                    }
+                  ?>
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-xs-12">
+                <br>
+                <label class="control-label" for="newAttributeValue">New Attribute Value:</label>
+                <input type="text" name="newAttributeValue" id="newAttributeValue" />
+                <br>
+                To add an Attribute that is not in the dropdown, please send the request in a Support Ticket.
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-custom" id="addNewAttribute">Add Attribute</button>
+            <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    
+
+  </div>
+
+  <?
+} // end if have data for the team ?>
+<script type="text/javascript">
+  $(document).ready(function() {
+    var CorpID = <?=vd($CorpO->ID, -1)?>;
+    
+    var PackageReports = <?=json_encode($PackageReportsByPackageID)?>;
+    var ReportConversion = <?=json_encode($ReportTypeConversion)?>;
+    
+    // The following handles the corp search dropdown list at the top of the page
+    var corps = <?=json_encode($CorpList) ?>;
+    
+    var reportList = <?=json_encode($ReportList)?>;
+    var allReports = <?=json_encode($AllReports)?>;
+    
+    // --------------------------------------- Corp Search Box --------------------------------------------
+    function TeamSearch (input) {
+      var returnArray = [];
+      var i = 0;
+      $.each(corps, function (index, value) {
+        if (i >= 30) {
+          return returnArray;
+        } else if (value.toUpperCase().indexOf(input.toUpperCase()) >= 0) {
+          returnArray[index] = value;
+          i++;
+        }
+      });
+      return returnArray;
+    }
+
+    function TeamSearchDisplay (results) {
+      $(".teamResult").remove();
+      var startingY = $("#corpSearch").offsetTop;
+      var i = 0;
+      $.each(results, function (corpID, result) {
+        if (result != undefined) {
+          if (i < 30) {
+            $("#searchDrop").append("<li class='teamResult'><a href='admin-team-edit.php?TeamID="+corpID+"'>"+result+"</a></li>");
+            i++;
+          }
+        }
+      });
+      if ($(".teamResult").length == 0) {
+        $("#searchDrop").append("<li class='teamResult'><a href='#'>Empty Results</a></li>");
+      }
+      return;
+    }
+
+    $("#corpSearch").on("keyup change", function () {
+      var searchVal = $("#corpSearch").val();
+      var results = TeamSearch(searchVal);
+      TeamSearchDisplay(results);
+    });
+    
+    // --------------------------------------- Add Report & Add Report Search Box --------------------------------------------
+    function ReportSearch (input) {
+      var returnArray = [];
+      var i = 0;
+      $.each(reportList, function (index, value) {
+        if (i >= 30) {
+          return returnArray;
+        } else if (value.toUpperCase().indexOf(input.toUpperCase()) >= 0) {
+          returnArray[index] = value;
+          i++;
+        }
+      });
+      return returnArray;
+    }
+
+    function ReportSearchDisplay (results) {
+      $(".reportResult").remove();
+      var startingY = $("#reportSearch").offsetTop;
+      var i = 0;
+      $.each(results, function (reportID, result) {
+        if (result != undefined) {
+          if (i < 30) {
+            $("#reportSearchDrop").append("<li><a href='#' class='reportResult' data-ReportID='"+reportID+"' >"+result+"</a></li>");
+            i++;
+          }
+        }
+      });
+      if ($(".reportResult").length == 0) {
+        $("#searchDrop").append("<li ><a href='#' class='reportResult' data-ReportID='-1'>Empty Results</a></li>");
+      }
+      
+      // --------------------------------------- Report Search Modal --------------------------------------------
+      
+      // this needs to be here because .reportResult is dynamically added, otherwise .reportResult won't bind to the 'on click' event
+      $(".reportResult").on('click change', function () {
+        event.preventDefault();
+        var ReportID = $(this).attr("data-ReportID");
+        $("#addReportRowID").html(ReportID);
+        $("#addReportRowName").html(allReports[ReportID].Title);
+        $("#addReportRowType").html(ReportConversion[allReports[ReportID].ReportTypeID]);
+        $(".addReportRow").removeClass("hidden");
+      });
+      
+      return;
+    }
+
+    $("#reportSearch").on("keyup", function () {
+      var searchVal = $("#reportSearch").val();
+      var results = ReportSearch(searchVal);
+      ReportSearchDisplay(results);
+    });
+    
+    $("#confirmAddReport").on('click', function () {
+      var ReportID = $("#addReportRowID").html();
+      var CorpFree = $("#addReportRowFree :selected").val();
+      var CorpOnly = $("#addReportRowViewableBy :selected").val();
+      console.log(ReportID+' '+CorpFree+' '+CorpOnly);
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"AddNonPackageReport", Data:{ReportID:ReportID, CorpFree:CorpFree, CorpOnly:CorpOnly}},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if(response == 'Success') {
+            location.reload();
+          } else {
+            var Message = response;
+            FailButton("confirmAddReport", Message);
+          }
+        }
+			});
+    });
+    
+    // --------------------------------------- Button Fail & Success Updates --------------------------------------------
+    function FailButton (buttonID, Message) {
+      var prevHTML = $("#"+buttonID).html();
+      $("#"+buttonID).addClass("btn-warning");
+      $("#"+buttonID).html("Failed");
+      alert(Message);
+      setTimeout(function() {
+        $("#"+buttonID).removeClass("btn-warning");
+        $("#"+buttonID).html(prevHTML);
+      }, 2500);
+    }
+    
+    function SuccessButton (buttonID) {
+      var prevHTML = $("#"+buttonID).html();
+      $("#"+buttonID).addClass("btn-success");
+      $("#"+buttonID).html("Saved!");
+      setTimeout(function() {
+        $("#"+buttonID).removeClass("btn-success");
+        $("#"+buttonID).html(prevHTML);
+      }, 2500);
+    }
+    
+    // --------------------------------------- Save Org Name --------------------------------------------
+    $("#saveName").on('click', function () {
+      var newName = $("#orgName").val();
+      console.log(newName);
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"UpdateCorpTable", Data:{'Name':newName}},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if(response.Name == 'Success') {
+            SuccessButton("saveName");
+          } else {
+            var Message = response.Name;
+            FailButton("saveName", Message);
+          }
+        }
+			});
+    });
+    
+    // --------------------------------------- Update Code Base --------------------------------------------
+    $("#saveCodeBase").on('click', function () {
+      var newCode = $("#codeBase").val();
+      console.log(newCode);
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"UpdateShortCodeBase", Data:newCode},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if($.type(response) == 'string') {
+            FailButton("saveCodeBase", response);
+          } else {
+            // Update bullet list of lots
+            var newLotList = '';
+            $.each(response, function (id, row) {
+              newLotList += '<li>'+row.Name+': '+row.code+'</li>';
+            });
+            $("#lotCodes").html(newLotList);
+            SuccessButton("saveCodeBase");
+          }
+        }
+			});
+    });
+    
+    // --------------------------------------- Save Org Status --------------------------------------------
+    $("#saveStatus").on('click', function () {
+      var newStatus = $("#Status :selected").text();
+      var newEndDate = $("#EndDate").val();
+      var newNoteDate = $("#NoteDate").val();
+      var newNote = $("#Note").val();
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"NewCorpPaymentStatus", Data:{Status:newStatus, EndDate:newEndDate, NoteDate:newNoteDate, Note:newNote}},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if(response == 'Success') {
+            SuccessButton("saveStatus");
+            var newRow = '<tr style="font-size: 13px;"><td><?=vd($_SESSION['FirstName'])?></td><td>'+newNoteDate+'</td><td>'+newStatus+'</td><td>'+newEndDate+'</td><td>'+newNote+'</td></tr>';
+            $('#statusTable > tbody').prepend(newRow);
+          } else {
+            FailButton("saveStatus", response);
+          }
+        }
+			});
+    });
+    
+    // --------------------------------------- New Package Level --------------------------------------------
+    $("#newPackageLevelDrop").on('change', function () {
+      var thisPackageReports = <?=json_encode(vd($CorpO->PackageReports, array()))?>;
+      console.log(' -------  TPR -------------');
+      console.log(thisPackageReports);
+      var packageID = $("#newPackageLevelDrop :selected").val();
+      var packageName = $("#newPackageLevelDrop :selected").html();
+      var newTableRows = '';
+      var newPackageReports = PackageReports[packageID];
+      console.log(' -------  NPR -------------');
+      console.log(newPackageReports);
+      
+      var displayedReportIDs = [-1];
+      
+      $("#packageShared").html("");
+      $("#packageRemoving").html("");
+      $("#packageAdding").html("");
+      
+      if(packageID == -1) {
+        $("#packageShared").html("<li>Not Applicable for Custom Package.</li>");
+        $("#packageRemoving").html("<li>Not Applicable for Custom Package.</li>");
+        $("#packageAdding").html("<li>Not Applicable for Custom Package.</li>");
+      } else {
+        $.each(thisPackageReports, function (id, pr) {
+          if((id in newPackageReports)) {
+            if(displayedReportIDs.indexOf(id) == -1) {
+              $("#packageShared").append("<li>"+id+' - '+pr.Title+"</li>");
+              displayedReportIDs.push(id);
+            }
+          } else {
+            if(displayedReportIDs.indexOf(id) == -1) {
+              $("#packageRemoving").append("<li>"+id+' - '+pr.Title+"</li>");
+              displayedReportIDs.push(id);
+            }
+          }
+        });
+        
+        $.each(newPackageReports, function (id, pr) {
+          if((id in thisPackageReports)) {
+            if(displayedReportIDs.indexOf(id) == -1) {
+              $("#packageShared").append("<li>"+id+' - '+pr.ReportName+"</li>");
+              displayedReportIDs.push(id);
+            }
+          } else {
+            if(displayedReportIDs.indexOf(id) == -1) {
+              $("#packageAdding").append("<li>"+id+' - '+pr.ReportName+"</li>");
+              displayedReportIDs.push(id);
+            }
+          }
+        });
+      }
+    });
+    
+    $("#saveNewPackageLevel").on('click', function () {
+      var newPackageLevel = $("#newPackageLevelDrop :selected").val();
+      console.log(newPackageLevel);
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"UpdatePackageLevel", Data:newPackageLevel},
+        success: function (response) {
+          console.log(response);
+          location.reload();
+        }
+			});
+    });
+    
+    // --------------------------------------- Edit Non Package Report --------------------------------------------
+    $(".saveReport").on('click', function () {
+      var ReportID = $(this).attr("data-ReportID");
+      var reportCorpFree = $("#reportCorpFree"+ReportID+' :selected').val();
+      var reportCorpOnly = $("#reportCorpOnly"+ReportID+' :selected').val();
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"UpdateReportPermissions", Data:{ReportID:ReportID, CorpOnly:reportCorpOnly, CorpFree:reportCorpFree}},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if(response == 'Success') {
+            SuccessButton ('saveReport'+ReportID);
+          } else {
+            FailButton(buttonID, response);
+          }
+        }
+			});
+    })
+    
+    // --------------------------------------- Delete Non Package Report --------------------------------------------
+    $(".deleteReport").on('click', function () {
+      var ReportID = $(this).attr("data-ReportID");
+      console.log(ReportID);
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"DeleteNonPackageReport", Data:ReportID},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if(response == 'Success') {
+            location.reload();
+          }
+        }
+			});
+    });
+    
+    // --------------------------------------- New Corp Attribute --------------------------------------------
+    $("#addNewAttribute").on('click', function () {
+      var Attribute = $("#newAttributeDrop :selected").val();
+      var Value = $("#newAttributeValue").val();
+      console.log(Attribute+': '+Value);
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"AddNewCorpAttribute", Data:{Attribute:Attribute, Value:Value}},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if(response == 'Success') {
+            location.reload();
+          } else {
+            FailButton("addNewAttribute", response);
+          }
+        }
+			});
+    });
+    
+    // --------------------------------------- Update Corp Attribute --------------------------------------------
+    $(".UpdateCorpAttribute").on('click', function () {
+      var eleID = event.target.id;
+      var Attribute = $(this).attr("data-attribute");
+      var Value = $("#Attribute"+Attribute).val();
+      console.log($.type(Value));
+      if($.type(Value) == 'array') {
+        var newValue = Value.join();
+        Value = newValue;
+      }
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"UpdateCorpAttribute", Data:{Attribute:Attribute, Value:Value}},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if(response == 'Success') {
+            location.reload();
+          } else {
+            FailButton(eleID, response);
+          }
+        }
+			});
+    });
+    
+    // --------------------------------------- Delete Corp Attribute --------------------------------------------
+    $(".deleteAttribute").on('click', function () {
+      var eleID = event.target.id;
+      var Attribute = $(this).attr("data-Attribute");
+      console.log('delete: '+Attribute);
+      $.ajax({
+        method: "POST",
+        url: "/ajax/admin-team-edit.php",
+        data: {CorpID:CorpID, Method:"DeleteCorpAttribute", Data:Attribute},
+        success: function (response) {
+          response = JSON.parse(response);
+          console.log(response);
+          if(response == 'Success') {
+            location.reload();
+          } else {
+            FailButton(eleID, response);
+          }
+        }
+			});
+    });
+
+  });
+</script>
